@@ -117,7 +117,7 @@ class BasicBlock(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers, multitask_layers, num_classes=1000, zero_init_residual=False,
+    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
                  norm_layer=None):
         super(ResNet, self).__init__()
@@ -154,14 +154,13 @@ class ResNet(nn.Module):
         # self.layerm = self._make_layer(block, 512, multitask_layers, stride=1, 
         #                                 dilate=replace_stride_with_dilation[3])
         self.in_planes_dec = 512
-        self.linearm = nn.Linear(1000, 512)
-        self.layer4m = self._make_layer_dec(BasicBlockDec, 256, layers[3], stride=2)
-        self.layer3m = self._make_layer_dec(BasicBlockDec, 128, layers[2], stride=2)
-        self.layer2m = self._make_layer_dec(BasicBlockDec, 64, layers[1], stride=2)
-        self.layer1m = self._make_layer_dec(BasicBlockDec, 32, layers[0], stride=2)
-        self.conv1m = ResizeConv2d(32, 1, kernel_size=3, scale_factor=2)
-        #self.convm = nn.Sequential(conv_block(64, 1))
+        self.layer5m = self._make_layer_dec(BasicBlockDec, 256, layers[4], stride=2)
+        self.layer4m = self._make_layer_dec(BasicBlockDec, 128, layers[3], stride=2)
+        self.layer3m = self._make_layer_dec(BasicBlockDec, 64, layers[2], stride=2)
+        self.layer2m = self._make_layer_dec(BasicBlockDec, 32, layers[1], stride=2)
+        self.layer1m = self._make_layer_dec(BasicBlockDec, 16, layers[0], stride=2)
 
+        self.conv1m = ResizeConv2d(16, 1, kernel_size=3, scale_factor=1)
 
 
         for m in self.modules():
@@ -240,16 +239,10 @@ class ResNet(nn.Module):
         out = self.layer3(mid)
         out = self.layer4(out)
 
-
-        out = self.avgpool(out)
-        out = torch.flatten(out, 1)
-        out = self.fc(out)
         outputs['final'] = out
-
         # predict explanation
-        outm = self.linearm(out)
-        outm = outm.view(out.size(0), 512, 1, 1)
-        outm = F.interpolate(outm, scale_factor=7)
+
+        outm = self.layer5m(out)
         outm = self.layer4m(outm)
         outm = self.layer3m(outm)
         outm = self.layer2m(outm)
@@ -264,8 +257,8 @@ class ResNet(nn.Module):
         return self._forward_impl(x)
 
 
-def _resnet(arch, block, layers, multitask_layers, pretrained, progress, **kwargs):
-    model = ResNet(block, layers, multitask_layers, **kwargs)
+def _resnet(arch, block, layers, pretrained, progress, **kwargs):
+    model = ResNet(block, layers, **kwargs)
     return model
 
 
@@ -277,7 +270,7 @@ def resnet18(pretrained=False, progress=True, **kwargs):
         pretrained (bool): If True, returns a model pre-trained on ImageNet
         progress (bool): If True, displays a progress bar of the download to stderr
     """
-    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2], 2, pretrained, progress,
+    return _resnet('resnet18', BasicBlock, [2, 2, 2, 2, 2], pretrained, progress,
                    **kwargs)
 
 
@@ -290,5 +283,5 @@ def resnet34(pretrained=False, progress=True, **kwargs):
         pretrained (bool): If True, returns a model pre-trained on ImageNet
         progress (bool): If True, displays a progress bar of the download to stderr
     """
-    return _resnet('resnet34', BasicBlock, [3, 4, 6, 3], 3, pretrained, progress,
+    return _resnet('resnet34', BasicBlock, [3, 4, 6, 3], pretrained, progress,
                    **kwargs)
