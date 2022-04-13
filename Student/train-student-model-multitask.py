@@ -13,10 +13,10 @@ from torch.utils.data import Dataset, DataLoader
 from student_models import resnet18
 
 
-TEST_PATH = F"./data/teacher-21-layers-test.pkl"
-TRAIN_PATH = F"./data/teacher-21-layers-train.pkl"
-ACC_DATA_PATH = F"./results/accuracy-curve-"
-NUM_CONFIGS = 3
+TEST_PATH = "./data/test.pkl"
+TRAIN_PATH = "./data/train.pkl"
+ACC_DATA_PATH = "./results/accuracy-curve-"
+NUM_CONFIGS = 5
 NUM_CHANNELS = 3
 NUM_EPOCHS = 60
 PLOT_FREQ = 4
@@ -50,9 +50,9 @@ class TeacherTrainset(Dataset):
 
 class TeacherTestset(Dataset):
 
-    def __init__(self):
+    def __init__(self, test_path):
       # data loading
-      with open(TEST_PATH, 'rb') as f:
+      with open(test_path, 'rb') as f:
         teacher_set = pickle.load(f)
         self.x = np.zeros((len(teacher_set), NUM_CHANNELS, HEIGHT, WIDTH))
         self.y = np.zeros(len(teacher_set))
@@ -71,10 +71,8 @@ class TeacherTestset(Dataset):
 
 trainset = TeacherTrainset(TRAIN_PATH)
 trainloader = DataLoader(dataset=trainset, batch_size=64, shuffle=True, num_workers=2)
-
-testset = TeacherTestset()
-testloader = DataLoader(dataset=testset, batch_size=64, shuffle=True, num_workers=2)
-
+testset = TeacherTestset(TEST_PATH)
+testloader = DataLoader(dataset=testset, batch_size=64, shuffle=False, num_workers=2)
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(device)
 
@@ -98,16 +96,16 @@ def train_model(explanation):
             net.to(device)
               
             # train
-            # if l == -1:
-            #     lam = 0
-            # else:
-            #     lam = 10 ** (-2*l) # 1,1e-2,1e-4,...1e-12
             if l == -1:
-                lam = 10 ** (-1.5)
-            if l == 0:
-                lam = 10 ** (-1)
-            if l == 1:
-                lam = 10 ** (-0.5)
+                lam = 0
+            else:
+                lam = 10 ** (-2*l) # 1,1e-2,1e-4,...1e-10
+            # if l == -1:
+            #     lam = 10 ** (-1.5)
+            # if l == 0:
+            #     lam = 10 ** (-1)
+            # if l == 1:
+            #     lam = 10 ** (-0.5)
             print('lam: ' + str(lam))
 
             curr_curve = [0]

@@ -35,26 +35,32 @@ import torch.nn.functional as F
 import torchvision.models as models
 
 from teacher_models import resnet18
+from torch.utils.data import Dataset
 
-DATA_PATH = './data/imagenette2/'
-MODEL_PATH = './model_best-90.pth.tar'
-TEST_PATH = "./teacher-data/teacher-21-layers-test.pkl"
-TRAIN_PATH = "./teacher-data/teacher-21-layers-train.pkl"
+DATA_PATH = '../datasets/coco/images/'
+MODEL_PATH = './model_best-pretrained.pth.tar'
+TRAIN_PATH = './teacher-data/train.pkl'
+TEST_PATH = './teacher-data/test.pkl'
 BATCH_SIZE = 256
 LEARNING_RATE = 1e-3
 SCALE_FACTOR = 8
-NUM_EXPLANATIONS = 7
+NUM_EXPLANATIONS = 1
 CLASS_MAP ={0:0, 217:1, 482:2, 491:3, 494:4, 566:5, 569:6, 571:7, 574:8, 701:9} # maps imagenet class target indices to corresponding imagenette ones
 
-def plot_middle_frequency(middle_layer, save_path=None):
-	img = middle_layer.squeeze().cpu().detach().numpy()
-	img = fftshift(fft2(img))
+class CocoDataSet(Dataset):
+    def __init__(self, main_dir, transform):
+        self.main_dir = main_dir
+        self.transform = transform
+        self.total_imgs = os.listdir(main_dir)
 
-	plt.imshow(np.log(1+np.abs(img)), cmap='hot')
-	if save_path is None:
-		plt.show()
-	else:
-		plt.savefig(save_path)
+    def __len__(self):
+        return len(self.total_imgs)
+
+    def __getitem__(self, idx):
+        img_loc = os.path.join(self.main_dir, self.total_imgs[idx])
+        image = Image.open(img_loc).convert("RGB")
+        tensor_image = self.transform(image)
+        return tensor_image
 
 # explanations is a list of tuples of the form (explanation_type, img), includes original image
 def plot_explanations(explanations, save_path=None):
@@ -239,79 +245,77 @@ def main():
 	inv_normalize = transforms.Normalize(mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
 										 std=[1/0.229, 1/0.224, 1/0.225])
 
-	valdir = os.path.join(DATA_PATH, 'val')
-	val_dataset = datasets.ImageFolder(
-		valdir, transforms.Compose([
+	traindir = os.path.join(DATA_PATH, 'train2017')
+	train_dataset = CocoDataSet(traindir, transform=transforms.Compose([
 		transforms.Resize(256),
 		transforms.CenterCrop(224),
 		transforms.ToTensor(),
 		])
 	)
+	train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=2)
 
-	normalized_data = datasets.ImageFolder(
-		valdir, transforms.Compose([
+
+	testdir = os.path.join(DATA_PATH, 'test2017')
+	test_dataset = CocoDataSet(testdir, transform=transforms.Compose([
 		transforms.Resize(256),
 		transforms.CenterCrop(224),
 		transforms.ToTensor(),
-		normalize
 		])
 	)
+	test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=True, num_workers=2)
 
-	sample_images = np.zeros((50,224,224,3))
-	sample_targets = np.zeros(50)
-	randomized_loader = torch.utils.data.DataLoader(val_dataset, batch_size=1, shuffle=True, num_workers=2)
-	for i, (image, target) in enumerate(randomized_loader):
-		if i == sample_images.shape[0]:
-			break
-		image = np.swapaxes(np.swapaxes(image.squeeze(), 0, 1), 1, 2)
-		sample_images[i] = image
-		sample_targets[i] = target
-	sample = (np.array(sample_images), np.array(sample_targets))
+	# normalized_data = datasets.ImageFolder(
+	# 	traindir, transforms.Compose([
+	# 	transforms.Resize(256),
+	# 	transforms.CenterCrop(224),
+	# 	transforms.ToTensor(),
+	# 	normalize
+	# 	])
+	# )
 
-
-
-	val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=2)
+	# sample_images = np.zeros((50,224,224,3))
+	# sample_targets = np.zeros(50)
+	# randomized_loader = torch.utils.data.DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=2)
+	# for i, (image, target) in enumerate(randomized_loader):
+	# 	if i == sample_images.shape[0]:
+	# 		break
+	# 	image = np.swapaxes(np.swapaxes(image.squeeze(), 0, 1), 1, 2)
+	# 	sample_images[i] = image
+	# 	sample_targets[i] = target
+	# sample = (np.array(sample_images), np.array(sample_targets))
 
 	standard_transform = [normalize]
 
 	device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 	state = torch.load(MODEL_PATH)
 	model = resnet18()
-	#optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
 	model.load_state_dict(state['state_dict'])
-	#optimizer.load_state_dict(state['optimizer'])
 	model.to(device)	
 
 	model.eval()
-	total = len(val_loader)
-	correct = 0
-
 	with torch.no_grad():
 		teacher_testset = []
 		teacher_trainset = []
-		for i, (image, target) in enumerate(val_loader):
+		for i, image in enumerate(train_loader):
+			if i % 1000 == 0:
+				print(i)
+			if i == 20000:
+				break
 			image = image.cuda(0, non_blocking=True)
-			target = target.cuda(0, non_blocking=True)
 
 			# compute output
 			model.eval()
 			model_output = model(normalize(image))
 			logits = model_output['final']
-			#logits = model_output
-			target_label = target.detach().cpu().numpy()[0]
 			teacher_label = logits.detach().cpu().numpy().flatten().argmax()
-			if teacher_label in CLASS_MAP:
-				teacher_label = CLASS_MAP[teacher_label]
 
-			if target_label == teacher_label:
-				correct += 1
 
 			# make copies for each type of explanation (so no tracing gradients twice)
 			images = []
 			for _ in range(NUM_EXPLANATIONS):
 				images.append(torch.clone(image).to(device))
 
-			#original(image, visualize=True, save_path=save_path+'original.pdf')
+			#original(image, visualize=True, save_path='original.pdf')
 			middle_explanation, output = middle_layer_saliency(model, images[0], transform=standard_transform)
 			#plot_middle_frequency(middle_explanation, save_path=freq_path)
 			#edges = edge_detector(images[1], transform=standard_transform)
@@ -320,23 +324,39 @@ def main():
 			#gradcam = saliency_gradcam(model, images[4], teacher_label, transform=standard_transform)
 			#lime = saliency_lime(model, images[5], teacher_label, transform=None)
 			#shap = saliency_shap(model, images[6], teacher_label, background_dist=sample, transform=standard_transform)
-			if i < 0.75 * total:
-				#explanations = (('original', image.cpu().numpy()), ('middle layer', middle_explanation.cpu().numpy().squeeze()), ('edge detector', edges), ('gradient', grad), ('smoothgrad', smooth_grad), ('gradcam', gradcam), ('lime', lime), ('shap', shap))
-				explanations = (('original', image.cpu().numpy()), ('middle layer', middle_explanation.cpu().numpy().squeeze()), ('label', teacher_label))
-				teacher_trainset.append(explanations)
-			else:
-				#explanations = (('original', image.cpu().numpy()), ('middle layer', middle_explanation.cpu().numpy().squeeze()), ('edge detector', edges), ('gradient', grad), ('smoothgrad', smooth_grad), ('gradcam', gradcam), ('lime', lime), ('shap', shap))
-				explanations = (('original', image.cpu().numpy()), ('label', teacher_label))
-				teacher_testset.append(explanations)
+			#explanations = (('original', image.cpu().numpy()), ('middle layer', middle_explanation.cpu().numpy().squeeze()), ('edge detector', edges), ('gradient', grad), ('smoothgrad', smooth_grad), ('gradcam', gradcam), ('lime', lime), ('shap', shap))
+			explanations = (('original', image.cpu().numpy()), ('middle layer', middle_explanation.cpu().numpy().squeeze()), ('label', teacher_label))
+			teacher_trainset.append(explanations)
 			#plot_explanations(explanations, save_path=save_path)
-	acc = correct / total
-	print(acc)
-	print(total)
-	# with open(TRAIN_PATH, 'wb') as f:
- #   		pickle.dump(teacher_trainset, f)
 
-	# with open(TEST_PATH, 'wb') as f:
- #   		pickle.dump(teacher_testset, f)
+		for i, image in enumerate(test_loader):
+			if i % 1000 == 0:
+				print(i)
+			if i == 10000:
+				break
+			image = image.cuda(0, non_blocking=True)
+
+			# compute output
+			model.eval()
+			model_output = model(normalize(image))
+			logits = model_output['final']
+			#logits = model_output
+			teacher_label = logits.detach().cpu().numpy().flatten().argmax()
+
+			# make copies for each type of explanation (so no tracing gradients twice)
+			images = []
+			for _ in range(NUM_EXPLANATIONS):
+				images.append(torch.clone(image).to(device))
+
+			middle_explanation, output = middle_layer_saliency(model, images[0], transform=standard_transform)
+			explanations = (('original', image.cpu().numpy()), ('label', teacher_label))
+			teacher_testset.append(explanations)
+
+	with open(TRAIN_PATH, 'wb') as f:
+   		pickle.dump(teacher_trainset, f)
+
+	with open(TEST_PATH, 'wb') as f:
+   		pickle.dump(teacher_testset, f)
 
 
 if __name__ == '__main__':

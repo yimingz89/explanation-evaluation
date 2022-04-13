@@ -237,12 +237,15 @@ class ResNet(nn.Module):
         outputs['middle'] = mid
 
         out = self.layer3(mid)
-        out = self.layer4(out)
+        outm = self.layer4(out)
 
+        out = self.avgpool(outm)
+        out = torch.flatten(out, 1)
+        out = self.fc(out)
         outputs['final'] = out
         # predict explanation
 
-        outm = self.layer5m(out)
+        outm = self.layer5m(outm)
         outm = self.layer4m(outm)
         outm = self.layer3m(outm)
         outm = self.layer2m(outm)
