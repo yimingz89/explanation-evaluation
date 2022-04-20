@@ -9,12 +9,13 @@ import torch.optim as optim
 import math
 import pickle
 import argparse
+import os
 from torch.utils.data import Dataset, DataLoader
 from student_models import resnet18
 
 
-TEST_PATH = "./data/test.pkl"
-TRAIN_PATH = "./data/train.pkl"
+TEST_PATH = "./data/test/"
+TRAIN_PATH = "./data/train/"
 ACC_DATA_PATH = "./results/accuracy-curve-"
 NUM_CONFIGS = 5
 NUM_CHANNELS = 3
@@ -27,23 +28,20 @@ WIDTH = 224
 class TeacherTrainset(Dataset):
 
     def __init__(self, train_path):
-      # data loading
-      self.train_path = train_path
-      with open(train_path, 'rb') as f:
-        teacher_set = pickle.load(f)
-        self.x = np.zeros((len(teacher_set), NUM_CHANNELS+1, HEIGHT, WIDTH))
-        self.y = np.zeros(len(teacher_set))
-        for i,d in enumerate(teacher_set):
-            image = d[0][1]
-            middle_explanation = np.expand_dims(d[1][1], axis=0)
-            label = d[2][1]
-            self.x[i][:NUM_CHANNELS] = image
-            self.x[i][NUM_CHANNELS] = middle_explanation
-            self.y[i] = label
-        self.n_samples = len(teacher_set)
+        # data loading
+        self.train_path = train_path
+        num_classes = len(os.listdir(train_path)) - 1
+        self.n_samples = 0
+        for i in range(num_classes):
+            self.n_samples += len(os.listdir(train_path + str(i)))
+        with open(train_path + 'label_map.pkl', 'rb') as f:
+            self.label_map = pickle.load(f)
 
     def __getitem__(self, index):
-        return self.x[index], self.y[index]
+        label = self.label_map[index]
+        load_path = self.train_path + str(label) + '/' + str(index) + '.npy'
+        data = np.load(load_path)
+        return data, label
     
     def __len__(self):
         return self.n_samples
@@ -52,19 +50,19 @@ class TeacherTestset(Dataset):
 
     def __init__(self, test_path):
       # data loading
-      with open(test_path, 'rb') as f:
-        teacher_set = pickle.load(f)
-        self.x = np.zeros((len(teacher_set), NUM_CHANNELS, HEIGHT, WIDTH))
-        self.y = np.zeros(len(teacher_set))
-        for i,d in enumerate(teacher_set):
-            image = d[0][1]
-            label = d[1][1]
-            self.x[i] = image
-            self.y[i] = label
-        self.n_samples = len(teacher_set)
+        self.test_path = test_path
+        num_classes = len(os.listdir(test_path)) - 1
+        self.n_samples = 0
+        for i in range(num_classes):
+            self.n_samples += len(os.listdir(test_path + str(i)))
+        with open(test_path + 'label_map.pkl', 'rb') as f:
+            self.label_map = pickle.load(f)
 
     def __getitem__(self, index):
-      return self.x[index], self.y[index]
+        label = self.label_map[index]
+        load_path = self.test_path + str(label) + '/' + str(index) + '.npy'
+        data = np.load(load_path)
+        return data, label
     
     def __len__(self):
       return self.n_samples
@@ -100,12 +98,6 @@ def train_model(explanation):
                 lam = 0
             else:
                 lam = 10 ** (-2*l) # 1,1e-2,1e-4,...1e-10
-            # if l == -1:
-            #     lam = 10 ** (-1.5)
-            # if l == 0:
-            #     lam = 10 ** (-1)
-            # if l == 1:
-            #     lam = 10 ** (-0.5)
             print('lam: ' + str(lam))
 
             curr_curve = [0]
@@ -117,13 +109,16 @@ def train_model(explanation):
                 for i, data in enumerate(trainloader):
                     # get the inputs; data is a list of [inputs, labels]
                     inputs, teacher_predictions = data[0].to(device), data[1].to(device)
+
                     # zero the parameter gradients
                     optimizer.zero_grad()
                     # forward + backward + optimize
                     student_outputs = net(inputs)
+
                     loss = student_loss(student_outputs, teacher_predictions, explanation_type=explanation, lam=lam)
                     loss.backward()
                     optimizer.step()
+
                         
                 if (epoch + 1) % PLOT_FREQ == 0:
                     # evaluate accuracy on test set

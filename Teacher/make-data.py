@@ -39,28 +39,32 @@ from torch.utils.data import Dataset
 
 DATA_PATH = '../datasets/coco/images/'
 MODEL_PATH = './model_best-pretrained.pth.tar'
-TRAIN_PATH = './teacher-data/train.pkl'
-TEST_PATH = './teacher-data/test.pkl'
+TRAIN_PATH = '../Student/data/train/'
+TEST_PATH = '../Student/data/test/'
 BATCH_SIZE = 256
 LEARNING_RATE = 1e-3
 SCALE_FACTOR = 8
 NUM_EXPLANATIONS = 1
+CLASSES = [0, 217, 482, 491, 494, 566, 569, 571, 574, 701]
 CLASS_MAP ={0:0, 217:1, 482:2, 491:3, 494:4, 566:5, 569:6, 571:7, 574:8, 701:9} # maps imagenet class target indices to corresponding imagenette ones
+NUM_CHANNELS = 3
+HEIGHT = 224
+WIDTH = 224
 
 class CocoDataSet(Dataset):
-    def __init__(self, main_dir, transform):
-        self.main_dir = main_dir
-        self.transform = transform
-        self.total_imgs = os.listdir(main_dir)
+	def __init__(self, main_dir, transform):
+		self.main_dir = main_dir
+		self.transform = transform
+		self.total_imgs = os.listdir(main_dir)
 
-    def __len__(self):
-        return len(self.total_imgs)
+	def __len__(self):
+		return len(self.total_imgs)
 
-    def __getitem__(self, idx):
-        img_loc = os.path.join(self.main_dir, self.total_imgs[idx])
-        image = Image.open(img_loc).convert("RGB")
-        tensor_image = self.transform(image)
-        return tensor_image
+	def __getitem__(self, idx):
+		img_loc = os.path.join(self.main_dir, self.total_imgs[idx])
+		image = Image.open(img_loc).convert("RGB")
+		tensor_image = self.transform(image)
+		return tensor_image
 
 # explanations is a list of tuples of the form (explanation_type, img), includes original image
 def plot_explanations(explanations, save_path=None):
@@ -287,19 +291,19 @@ def main():
 	standard_transform = [normalize]
 
 	device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-	state = torch.load(MODEL_PATH)
+	state = torch.load(MODEL_PATH) # use pre-trained resnet-18 on ImageNet
 	model = resnet18()
 	model.load_state_dict(state['state_dict'])
 	model.to(device)	
 
 	model.eval()
 	with torch.no_grad():
-		teacher_testset = []
-		teacher_trainset = []
+		train_labels = []
+		test_labels = []
 		for i, image in enumerate(train_loader):
 			if i % 1000 == 0:
 				print(i)
-			if i == 20000:
+			if i == 10000:
 				break
 			image = image.cuda(0, non_blocking=True)
 
@@ -307,8 +311,8 @@ def main():
 			model.eval()
 			model_output = model(normalize(image))
 			logits = model_output['final']
-			teacher_label = logits.detach().cpu().numpy().flatten().argmax()
-
+			logits = logits.detach().cpu().numpy().flatten()
+			teacher_label = np.take(logits, CLASSES).argmax() # make sure model is only predicting imagenette classes, not ImageNet
 
 			# make copies for each type of explanation (so no tracing gradients twice)
 			images = []
@@ -326,13 +330,17 @@ def main():
 			#shap = saliency_shap(model, images[6], teacher_label, background_dist=sample, transform=standard_transform)
 			#explanations = (('original', image.cpu().numpy()), ('middle layer', middle_explanation.cpu().numpy().squeeze()), ('edge detector', edges), ('gradient', grad), ('smoothgrad', smooth_grad), ('gradcam', gradcam), ('lime', lime), ('shap', shap))
 			explanations = (('original', image.cpu().numpy()), ('middle layer', middle_explanation.cpu().numpy().squeeze()), ('label', teacher_label))
-			teacher_trainset.append(explanations)
+			training_sample = np.zeros((NUM_CHANNELS + NUM_EXPLANATIONS, HEIGHT, WIDTH))
+			training_sample[:NUM_CHANNELS] = image.cpu().numpy().squeeze()
+			training_sample[NUM_CHANNELS] = middle_explanation.cpu().numpy().squeeze()
 			#plot_explanations(explanations, save_path=save_path)
-
+			save_path = TRAIN_PATH + str(teacher_label) + '/' + str(i) + '.npy'
+			np.save(save_path, training_sample)
+			train_labels.append(teacher_label)
 		for i, image in enumerate(test_loader):
 			if i % 1000 == 0:
 				print(i)
-			if i == 10000:
+			if i == 2000:
 				break
 			image = image.cuda(0, non_blocking=True)
 
@@ -340,24 +348,24 @@ def main():
 			model.eval()
 			model_output = model(normalize(image))
 			logits = model_output['final']
-			#logits = model_output
-			teacher_label = logits.detach().cpu().numpy().flatten().argmax()
+			logits = logits.detach().cpu().numpy().flatten()
+			teacher_label = np.take(logits, CLASSES).argmax() # make sure model is only predicting imagenette classes, not ImageNet
 
 			# make copies for each type of explanation (so no tracing gradients twice)
 			images = []
 			for _ in range(NUM_EXPLANATIONS):
 				images.append(torch.clone(image).to(device))
 
-			middle_explanation, output = middle_layer_saliency(model, images[0], transform=standard_transform)
+			#middle_explanation, output = middle_layer_saliency(model, images[0], transform=standard_transform)
 			explanations = (('original', image.cpu().numpy()), ('label', teacher_label))
-			teacher_testset.append(explanations)
+			save_path = TEST_PATH + str(teacher_label) + '/' + str(i) + '.npy'
+			np.save(save_path, image.cpu().numpy().squeeze())
+			test_labels.append(teacher_label)
 
-	with open(TRAIN_PATH, 'wb') as f:
-   		pickle.dump(teacher_trainset, f)
-
-	with open(TEST_PATH, 'wb') as f:
-   		pickle.dump(teacher_testset, f)
-
-
+	with open(TRAIN_PATH + 'label_map.pkl', 'wb') as f:
+		pickle.dump(train_labels, f)
+	with open(TEST_PATH + 'label_map.pkl', 'wb') as f:
+		pickle.dump(test_labels, f)
+		
 if __name__ == '__main__':
 	main()
